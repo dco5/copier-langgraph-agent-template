@@ -1,0 +1,8 @@
+{
+  "$schema": "https://langchain-ai.github.io/langgraph/schemas/langgraph.schema.json",
+  "dependencies": ["."],
+  "graphs": {
+    "{{ agent_name }}": "./src/agents/{{ agent_name }}.py:create_{{ agent_name }}"
+  },
+  "env": ".env.development"
+}

@@ -1,0 +1,127 @@
+"""
+{{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent - {{ agent_description }}
+"""
+
+from typing import Any, Literal
+
+from langchain_core.messages import SystemMessage
+from langgraph.graph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode
+
+from src.agents.base import BaseAgent, AgentConfig, AgentState
+from src.tools import get_tools
+from src.core.logging import get_logger
+
+logger = get_logger("{{ agent_name }}")
+
+
+class {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}State(AgentState):
+    """Extended state for {{ agent_name }}."""
+    current_context: dict[str, Any] | None = None
+    pending_actions: list[dict[str, Any]] | None = None
+
+
+class {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent(BaseAgent):
+    """
+    {{ agent_description }}
+
+    Capabilities:
+    - Natural language conversation
+    - Tool execution
+    - Context-aware responses
+    """
+
+    name = "{{ agent_name }}"
+    description = "{{ agent_description }}"
+
+    def __init__(self, config: AgentConfig | None = None):
+        super().__init__(config)
+        self._tools = None
+
+    def get_tools(self) -> list:
+        """Get tools for this agent."""
+        if self._tools is None:
+            self._tools = get_tools()
+        return self._tools
+
+    def get_system_prompt(self) -> str:
+        """Get system prompt for {{ agent_name }}."""
+        # Try to load from file first
+        prompt = super().get_system_prompt()
+        if prompt:
+            return prompt
+
+        # Default system prompt
+        return """You are a helpful AI assistant.
+
+Your capabilities include:
+- Answering questions accurately and helpfully
+- Using available tools when needed
+- Maintaining conversation context
+- Providing clear and concise responses
+
+Guidelines:
+1. Be helpful, harmless, and honest
+2. Ask clarifying questions when the request is ambiguous
+3. Use tools when they can help answer the user's question
+4. Keep responses concise but informative
+5. Acknowledge limitations when you cannot help
+
+When you don't know something, say so clearly."""
+
+    def build_graph(self) -> StateGraph:
+        """Build the {{ agent_name }} graph."""
+
+        # Bind tools to LLM
+        tools = self.get_tools()
+        llm_with_tools = self.llm.bind_tools(tools)
+
+        # Define nodes
+        async def agent_node(state: {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}State) -> dict:
+            """Main agent reasoning node."""
+            messages = state.messages
+
+            # Add system prompt if first message
+            system_prompt = self.get_system_prompt()
+            if system_prompt and (not messages or messages[0].type != "system"):
+                messages = [SystemMessage(content=system_prompt)] + messages
+
+            response = await llm_with_tools.ainvoke(messages)
+
+            return {"messages": [response]}
+
+        def should_continue(state: {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}State) -> Literal["tools", "__end__"]:
+            """Determine if we should continue to tools or end."""
+            last_message = state.messages[-1]
+
+            # If there are tool calls, continue to tools
+            if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                return "tools"
+
+            return "__end__"
+
+        # Build graph
+        graph = StateGraph({{ agent_name | replace('_', ' ') | title | replace(' ', '') }}State)
+
+        # Add nodes
+        graph.add_node("agent", agent_node)
+        graph.add_node("tools", ToolNode(tools))
+
+        # Add edges
+        graph.add_edge(START, "agent")
+        graph.add_conditional_edges(
+            "agent",
+            should_continue,
+            {
+                "tools": "tools",
+                "__end__": END,
+            },
+        )
+        graph.add_edge("tools", "agent")
+
+        return graph
+
+
+def create_{{ agent_name }}(config: AgentConfig | None = None) -> {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent:
+    """Factory function to create {{ agent_name }} agent."""
+    return {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent(config)

@@ -1,0 +1,82 @@
+name: Test Template
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-template:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        llm-provider: ["openai", "anthropic"]
+        database: ["postgresql", "sqlite", "memory"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install Copier
+        run: uv tool install copier
+
+      - name: Generate test project
+        run: |
+          copier copy . ./test-project --defaults --trust \
+            -d project_name="Test Agent" \
+            -d project_slug="test-agent" \
+            -d agent_name="test_assistant" \
+            -d python_version="${{ matrix.python-version }}" \
+            -d llm_provider="${{ matrix.llm-provider }}" \
+            -d database="${{ matrix.database }}" \
+            -d use_docker=false \
+            -d use_streamlit=false
+
+      - name: Install test project dependencies
+        run: |
+          cd test-project
+          uv sync --frozen --all-extras
+
+      - name: Run linting
+        run: |
+          cd test-project
+          uv run ruff check src/ tests/
+
+      - name: Run tests
+        run: |
+          cd test-project
+          uv run pytest tests/ -v --ignore=tests/integration/
+        env:
+          OPENAI_API_KEY: "sk-test-key"
+          ANTHROPIC_API_KEY: "sk-ant-test-key"
+
+  test-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Copier
+        run: uv tool install copier
+
+      - name: Generate test project with Docker
+        run: |
+          copier copy . ./test-project --defaults --trust \
+            -d project_name="Docker Test" \
+            -d project_slug="docker-test" \
+            -d use_docker=true \
+            -d database=postgresql
+
+      - name: Build Docker image
+        run: |
+          cd test-project
+          docker build -f infrastructure/docker/Dockerfile -t test-agent .

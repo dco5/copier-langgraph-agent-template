@@ -1,0 +1,114 @@
+"""
+Agent registry for managing multiple agents.
+Provides centralized access to all available agents.
+"""
+
+from typing import Type
+
+from src.agents.base import BaseAgent, AgentConfig
+from src.agents.{{ agent_name }} import {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent
+from src.core.logging import get_logger
+
+logger = get_logger("agent_registry")
+
+
+class AgentRegistry:
+    """
+    Registry for managing agent instances.
+
+    Features:
+    - Lazy initialization of agents
+    - Agent discovery via /info endpoint
+    - Configuration per agent
+    """
+
+    # Register agent classes here
+    AGENTS: dict[str, Type[BaseAgent]] = {
+        "{{ agent_name }}": {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent,
+        # Add more agents as needed:
+        # "research_agent": ResearchAgent,
+        # "coding_agent": CodingAgent,
+    }
+
+    def __init__(self):
+        self._instances: dict[str, BaseAgent] = {}
+        self._configs: dict[str, AgentConfig] = {}
+
+    def register(
+        self,
+        name: str,
+        agent_class: Type[BaseAgent],
+        config: AgentConfig | None = None,
+    ) -> None:
+        """Register a new agent class."""
+        self.AGENTS[name] = agent_class
+        if config:
+            self._configs[name] = config
+        logger.info("agent_registered", agent_name=name)
+
+    def get(self, name: str, config: AgentConfig | None = None) -> BaseAgent:
+        """
+        Get an agent instance by name.
+        Creates new instance if not cached or config provided.
+        """
+        if name not in self.AGENTS:
+            raise ValueError(f"Unknown agent: {name}. Available: {list(self.AGENTS.keys())}")
+
+        # Use provided config or cached config
+        effective_config = config or self._configs.get(name)
+
+        # Create new instance if config provided or not cached
+        if config or name not in self._instances:
+            agent_class = self.AGENTS[name]
+            self._instances[name] = agent_class(effective_config)
+            logger.debug("agent_instantiated", agent_name=name)
+
+        return self._instances[name]
+
+    def list_agents(self) -> list[str]:
+        """List all registered agent names."""
+        return list(self.AGENTS.keys())
+
+    def info(self) -> dict:
+        """Get information about all registered agents."""
+        agents_info = {}
+
+        for name in self.AGENTS:
+            try:
+                agent = self.get(name)
+                agents_info[name] = agent.info()
+            except Exception as e:
+                agents_info[name] = {
+                    "name": name,
+                    "error": str(e),
+                }
+
+        return {
+            "agents": agents_info,
+            "default_agent": "{{ agent_name }}",
+            "total_count": len(self.AGENTS),
+        }
+
+    def clear_cache(self) -> None:
+        """Clear all cached agent instances."""
+        self._instances.clear()
+        logger.info("agent_cache_cleared")
+
+
+# Global registry instance
+registry = AgentRegistry()
+
+
+def get_agent(name: str, config: AgentConfig | None = None) -> BaseAgent:
+    """Convenience function to get an agent from the global registry."""
+    return registry.get(name, config)
+
+
+def list_agents() -> list[str]:
+    """List all available agents."""
+    return registry.list_agents()
+
+
+def get_agents_info() -> dict:
+    """Get information about all agents."""
+    return registry.info()

@@ -1,0 +1,92 @@
+"""
+Health check and metrics endpoints.
+"""
+
+from fastapi import APIRouter, Request
+{%- if use_prometheus %}
+from fastapi.responses import PlainTextResponse
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+{%- endif %}
+from pydantic import BaseModel
+
+from src.core.config import settings
+{%- if use_rate_limiting %}
+from src.core.limiter import limiter, RateLimits
+{%- endif %}
+from src.services.database import check_db_health
+
+router = APIRouter(tags=["health"])
+
+
+class HealthResponse(BaseModel):
+    """Health check response."""
+    status: str
+    environment: str
+    version: str = "0.1.0"
+    database: str
+    details: dict | None = None
+
+
+@router.get("/health", response_model=HealthResponse)
+{%- if use_rate_limiting %}
+@limiter.limit(RateLimits.HEALTH)
+{%- endif %}
+async def health_check(request: Request) -> HealthResponse:
+    """
+    Check the health of the service and its dependencies.
+
+    Returns:
+        Health status including database connectivity
+    """
+    db_health = await check_db_health()
+
+    overall_status = "healthy" if db_health["status"] == "healthy" else "degraded"
+
+    return HealthResponse(
+        status=overall_status,
+        environment=settings.app_env,
+        database=db_health["status"],
+        details=db_health if overall_status != "healthy" else None,
+    )
+
+
+@router.get("/health/live")
+async def liveness_probe() -> dict[str, str]:
+    """
+    Kubernetes liveness probe.
+    Returns 200 if the service is running.
+    """
+    return {"status": "alive"}
+
+
+@router.get("/health/ready")
+async def readiness_probe() -> dict[str, str]:
+    """
+    Kubernetes readiness probe.
+    Returns 200 if the service is ready to accept traffic.
+    """
+    db_health = await check_db_health()
+
+    if db_health["status"] != "healthy":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+    return {"status": "ready"}
+
+
+{%- if use_prometheus %}
+
+
+@router.get("/metrics", response_class=PlainTextResponse)
+async def metrics() -> PlainTextResponse:
+    """
+    Prometheus metrics endpoint.
+
+    Returns:
+        Prometheus metrics in text format
+    """
+    return PlainTextResponse(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+{%- endif %}

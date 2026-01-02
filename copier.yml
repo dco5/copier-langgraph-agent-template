@@ -1,0 +1,315 @@
+# Copier Template Configuration - LangGraph Agent Service
+# Template Version: 0.1.0
+# Requires: copier >= 9.0.0
+
+_min_copier_version: "9.0.0"
+_answers_file: .copier-answers.yml
+
+# =============================================================================
+# PROJECT IDENTITY
+# =============================================================================
+
+project_name:
+  type: str
+  help: What is your project name? (Human readable)
+  default: My Agent Service
+  validator: "{% if not project_name %}Project name is required{% endif %}"
+
+project_slug:
+  type: str
+  help: Project slug for package/directory name (lowercase, hyphens)
+  default: "{{ project_name | lower | replace(' ', '-') | replace('_', '-') }}"
+  validator: "{% if ' ' in project_slug or project_slug != project_slug | lower %}Must be lowercase with hyphens only{% endif %}"
+
+project_description:
+  type: str
+  help: Short description of your project
+  default: Production-ready LangGraph agent service
+
+author_name:
+  type: str
+  help: Author name
+  default: Your Name
+
+author_email:
+  type: str
+  help: Author email
+  default: you@example.com
+
+# =============================================================================
+# AGENT CONFIGURATION
+# =============================================================================
+
+agent_name:
+  type: str
+  help: Name for the default agent (snake_case, e.g., 'assistant', 'support_bot')
+  default: assistant
+  validator: "{% if ' ' in agent_name or '-' in agent_name %}Use snake_case (underscores, no spaces or hyphens){% endif %}"
+
+agent_description:
+  type: str
+  help: What does your agent do? (One sentence)
+  default: AI assistant for your domain
+
+# =============================================================================
+# PYTHON VERSION
+# =============================================================================
+
+python_version:
+  type: str
+  help: Python version (3.10+ required for LangGraph 1.0)
+  default: "3.12"
+  choices:
+    - "3.10"
+    - "3.11"
+    - "3.12"
+    - "3.13"
+
+# =============================================================================
+# LLM PROVIDER CONFIGURATION
+# =============================================================================
+
+llm_provider:
+  type: str
+  help: Default LLM provider
+  default: openai
+  choices:
+    OpenAI (GPT-4.1, GPT-4.1-mini): openai
+    Anthropic (Claude Sonnet 4, Claude Haiku 4): anthropic
+    Azure OpenAI: azure
+    Ollama (local models): ollama
+
+default_model:
+  type: str
+  help: Default model to use
+  default: "{% if llm_provider == 'openai' %}gpt-4.1{% elif llm_provider == 'anthropic' %}claude-sonnet-4-20250514{% elif llm_provider == 'azure' %}gpt-4.1{% else %}llama3.3{% endif %}"
+
+# =============================================================================
+# DATABASE CONFIGURATION
+# =============================================================================
+
+database:
+  type: str
+  help: Database backend for state persistence
+  default: postgresql
+  choices:
+    PostgreSQL (recommended for production): postgresql
+    SQLite (simpler, file-based): sqlite
+    In-Memory (no persistence, development only): memory
+
+# =============================================================================
+# OBSERVABILITY
+# =============================================================================
+
+observability:
+  type: str
+  help: LLM observability/tracing platform
+  default: none
+  choices:
+    Langfuse (open source, self-hostable): langfuse
+    LangSmith (LangChain's platform): langsmith
+    None: none
+
+use_prometheus:
+  type: bool
+  help: Include Prometheus metrics & Grafana dashboards?
+  default: true
+
+# =============================================================================
+# OPTIONAL FEATURES
+# =============================================================================
+
+use_docker:
+  type: bool
+  help: Include Docker & docker-compose configuration?
+  default: true
+
+use_streamlit:
+  type: bool
+  help: Include Streamlit WebUI for fast prototyping?
+  default: false
+
+use_semantic_memory:
+  type: bool
+  help: Include semantic memory (mem0ai + vector search)?
+  default: true
+  when: "{{ database == 'postgresql' }}"
+
+use_trustcall:
+  type: bool
+  help: Include Trustcall automatic memory extraction?
+  default: true
+
+use_auth:
+  type: bool
+  help: Include JWT authentication?
+  default: true
+
+use_rate_limiting:
+  type: bool
+  help: Include rate limiting?
+  default: true
+
+include_hitl_examples:
+  type: bool
+  help: Include Human-in-the-Loop (HITL) code examples (commented)?
+  default: true
+
+# =============================================================================
+# LICENSE
+# =============================================================================
+
+license:
+  type: str
+  help: Choose a license
+  default: MIT
+  choices:
+    - MIT
+    - Apache-2.0
+    - BSD-3-Clause
+    - Proprietary
+
+# =============================================================================
+# COMPUTED VALUES (not prompted)
+# =============================================================================
+
+_agent_class:
+  type: str
+  default: "{{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent"
+  when: false
+
+_agent_state_class:
+  type: str
+  default: "{{ agent_name | replace('_', ' ') | title | replace(' ', '') }}State"
+  when: false
+
+_db_name:
+  type: str
+  default: "{{ project_slug | replace('-', '_') }}"
+  when: false
+
+_memory_collection:
+  type: str
+  default: "{{ project_slug | replace('-', '_') }}_memories"
+  when: false
+
+_package_name:
+  type: str
+  default: "{{ project_slug | replace('-', '_') }}"
+  when: false
+
+_current_year:
+  type: str
+  default: "2025"
+  when: false
+
+# =============================================================================
+# TEMPLATE SETTINGS
+# =============================================================================
+
+_exclude:
+  # Python artifacts
+  - "**/__pycache__"
+  - "**/*.pyc"
+  - "**/*.pyo"
+  - ".pytest_cache"
+  - ".mypy_cache"
+  - ".ruff_cache"
+  - "htmlcov"
+  - ".coverage"
+  - "*.egg-info"
+  - "dist"
+  - "build"
+  - ".venv"
+  - "venv"
+
+  # IDE
+  - ".idea"
+  - ".vscode"
+  - "*.swp"
+
+  # OS
+  - ".DS_Store"
+  - "Thumbs.db"
+
+  # Conditional exclusions
+  - "{% if not use_docker %}docker-compose.yml.jinja{% endif %}"
+  - "{% if not use_docker %}docker-compose.dev.yml.jinja{% endif %}"
+  - "{% if not use_docker %}infrastructure/docker{% endif %}"
+  - "{% if not use_prometheus %}infrastructure/prometheus{% endif %}"
+  - "{% if not use_prometheus %}infrastructure/grafana{% endif %}"
+  - "{% if not use_streamlit %}streamlit_app{% endif %}"
+
+_skip_if_exists:
+  - ".env"
+  - ".env.development"
+  - ".env.production"
+
+_tasks:
+  - "cd {{ project_slug }} && git init"
+  - "cd {{ project_slug }} && git add ."
+  - "cd {{ project_slug }} && git commit -m 'Initial commit from copier-langgraph-agent template'"
+
+_message_before_copy: |
+
+  ╔═══════════════════════════════════════════════════════════════════════════╗
+  ║                       copier-langgraph-agent                              ║
+  ║                                                                           ║
+  ║  Create a production-ready LangGraph agent service with:                  ║
+  ║  • Multi-provider LLM support (OpenAI, Anthropic, Azure, Ollama)          ║
+  ║  • State persistence with PostgreSQL or SQLite checkpointers              ║
+  ║  • FastAPI endpoints with streaming support                               ║
+  ║  • Optional: Docker, Prometheus, Grafana, Streamlit UI                    ║
+  ║                                                                           ║
+  ╚═══════════════════════════════════════════════════════════════════════════╝
+
+  Answer the following questions to customize your project.
+
+_message_after_copy: |
+
+  ╔═══════════════════════════════════════════════════════════════════════════╗
+  ║                      Project Created Successfully!                        ║
+  ╚═══════════════════════════════════════════════════════════════════════════╝
+
+  Your project "{{ project_name }}" has been created!
+
+  Location: {{ project_slug }}/
+
+  Next steps:
+  ──────────────────────────────────────────────────────────────────────────────
+  1. cd {{ project_slug }}
+  2. cp .env.example .env.development
+  3. Edit .env.development with your API keys
+  {% if use_docker and database == 'postgresql' %}
+  4. make docker-dev    # Start with Docker (includes PostgreSQL)
+  {% elif database == 'postgresql' %}
+  4. # Start PostgreSQL manually, then:
+     make install-dev
+     make dev
+  {% else %}
+  4. make install-dev
+     make dev
+  {% endif %}
+  {% if use_streamlit %}
+  5. make streamlit    # Start Streamlit UI
+  {% endif %}
+
+  API docs: http://localhost:8000/docs
+  {% if use_streamlit %}
+  Streamlit UI: http://localhost:8501
+  {% endif %}
+
+  ──────────────────────────────────────────────────────────────────────────────
+  Happy building!
+
+_message_after_update: |
+
+  ╔═══════════════════════════════════════════════════════════════════════════╗
+  ║                      Project Updated Successfully!                        ║
+  ╚═══════════════════════════════════════════════════════════════════════════╝
+
+  Project updated to latest template version.
+
+  Please review any merge conflicts and run:
+    make install-dev
+    make test

@@ -1,0 +1,185 @@
+"""
+FastAPI middleware for request context, logging, and metrics.
+"""
+
+import time
+import uuid
+from typing import Callable
+
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from src.core.config import settings
+from src.core.logging import bind_context, clear_context, get_logger
+{%- if use_prometheus %}
+from src.core.metrics import record_request
+{%- endif %}
+
+logger = get_logger("middleware")
+
+
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware that:
+    1. Generates unique request ID
+    2. Binds request context to structlog
+    3. Logs request/response details
+{%- if use_prometheus %}
+    4. Records Prometheus metrics
+{%- endif %}
+    """
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        # Generate request ID
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+
+        # Extract user info if available (set by auth)
+        user_id = getattr(request.state, "user_id", None)
+
+        # Bind context for structured logging
+        clear_context()
+        bind_context(
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            user_id=user_id,
+        )
+
+        # Start timing
+        start_time = time.perf_counter()
+
+        # Log request
+        logger.info(
+            "request_started",
+            query_params=dict(request.query_params),
+            client_host=request.client.host if request.client else None,
+        )
+
+        # Process request
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            # Log exception
+            duration = time.perf_counter() - start_time
+            logger.exception(
+                "request_failed",
+                duration=duration,
+                error=str(e),
+            )
+
+{%- if use_prometheus %}
+            # Record metrics
+            if settings.metrics_enabled:
+                record_request(
+                    method=request.method,
+                    endpoint=request.url.path,
+                    status=500,
+                    duration=duration,
+                )
+{%- endif %}
+
+            raise
+
+        # Calculate duration
+        duration = time.perf_counter() - start_time
+
+        # Log response
+        logger.info(
+            "request_completed",
+            status_code=response.status_code,
+            duration=round(duration, 4),
+        )
+
+{%- if use_prometheus %}
+        # Record metrics
+        if settings.metrics_enabled:
+            record_request(
+                method=request.method,
+                endpoint=request.url.path,
+                status=response.status_code,
+                duration=duration,
+            )
+{%- endif %}
+
+        # Add response headers
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Process-Time"] = str(round(duration, 4))
+
+        return response
+
+
+class CORSMiddleware:
+    """Custom CORS middleware with configurable origins."""
+
+    def __init__(
+        self,
+        app,
+        allow_origins: list[str] | None = None,
+        allow_methods: list[str] | None = None,
+        allow_headers: list[str] | None = None,
+        allow_credentials: bool = True,
+    ):
+        self.app = app
+        self.allow_origins = allow_origins or ["*"]
+        self.allow_methods = allow_methods or ["*"]
+        self.allow_headers = allow_headers or ["*"]
+        self.allow_credentials = allow_credentials
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Handle preflight requests
+        if scope["method"] == "OPTIONS":
+            headers = self._get_cors_headers(scope)
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": headers,
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b"",
+            })
+            return
+
+        # Add CORS headers to response
+        async def send_with_cors(message):
+            if message["type"] == "http.response.start":
+                headers = dict(message.get("headers", []))
+                cors_headers = self._get_cors_headers(scope)
+                for key, value in cors_headers:
+                    headers[key] = value
+                message["headers"] = list(headers.items())
+            await send(message)
+
+        await self.app(scope, receive, send_with_cors)
+
+    def _get_cors_headers(self, scope) -> list[tuple[bytes, bytes]]:
+        """Generate CORS headers."""
+        origin = None
+        for header_name, header_value in scope.get("headers", []):
+            if header_name == b"origin":
+                origin = header_value.decode()
+                break
+
+        headers = []
+
+        if origin:
+            if "*" in self.allow_origins or origin in self.allow_origins:
+                headers.append((b"access-control-allow-origin", origin.encode()))
+
+        if self.allow_credentials:
+            headers.append((b"access-control-allow-credentials", b"true"))
+
+        headers.append((
+            b"access-control-allow-methods",
+            ", ".join(self.allow_methods).encode()
+        ))
+        headers.append((
+            b"access-control-allow-headers",
+            ", ".join(self.allow_headers).encode()
+        ))
+
+        return headers

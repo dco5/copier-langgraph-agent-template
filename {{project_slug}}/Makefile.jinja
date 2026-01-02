@@ -1,0 +1,140 @@
+.PHONY: help install dev test lint format clean docker-build docker-up docker-down
+
+# Default target
+help:
+	@echo "{{ project_name }} - Available commands:"
+	@echo ""
+	@echo "  Development:"
+	@echo "    install      Install dependencies with uv"
+	@echo "    dev          Run development server"
+	@echo "    test         Run tests"
+	@echo "    test-cov     Run tests with coverage"
+	@echo "    lint         Run linter"
+	@echo "    format       Format code"
+	@echo ""
+{%- if use_docker %}
+	@echo "  Docker:"
+	@echo "    docker-dev   Run with docker compose (development)"
+	@echo "    docker-prod  Run with docker compose (production)"
+	@echo "    docker-down  Stop all containers"
+	@echo "    docker-logs  View container logs"
+	@echo ""
+{%- endif %}
+{%- if database != 'memory' %}
+	@echo "  Database:"
+	@echo "    db-migrate   Run database migrations"
+	@echo "    db-reset     Reset database"
+	@echo ""
+{%- endif %}
+{%- if use_streamlit %}
+	@echo "  Streamlit:"
+	@echo "    streamlit    Run Streamlit UI"
+	@echo ""
+{%- endif %}
+
+# Installation
+install:
+	uv sync
+
+install-dev:
+	uv sync --all-extras
+
+# Development server
+dev:
+	APP_ENV=development uv run python src/main.py
+
+prod:
+	APP_ENV=production uv run python src/main.py
+
+# Testing
+test:
+	uv run pytest tests/ -v
+
+test-cov:
+	uv run pytest tests/ -v --cov=src --cov-report=html --cov-report=term
+
+test-unit:
+	uv run pytest tests/unit/ -v
+
+test-integration:
+	uv run pytest tests/integration/ -v
+
+# Linting and formatting
+lint:
+	uv run ruff check src/ tests/
+	uv run mypy src/
+
+format:
+	uv run ruff format src/ tests/
+	uv run ruff check --fix src/ tests/
+
+# Quality check (lint + test)
+check:
+	@make lint
+	@make test
+
+{%- if use_docker %}
+
+# Docker commands
+docker-dev:
+	docker compose -f docker-compose.dev.yml up --watch
+
+docker-prod:
+	docker compose up -d
+
+docker-build:
+	docker compose build
+
+docker-down:
+	docker compose down
+	docker compose -f docker-compose.dev.yml down
+
+docker-logs:
+	docker compose logs -f agent-service
+
+docker-clean:
+	docker compose down -v
+	docker compose -f docker-compose.dev.yml down -v
+{%- endif %}
+
+{%- if database != 'memory' %}
+
+# Database
+db-migrate:
+	alembic upgrade head
+
+db-reset:
+	alembic downgrade base
+	alembic upgrade head
+
+db-revision:
+	@read -p "Enter migration message: " msg; \
+	alembic revision --autogenerate -m "$$msg"
+{%- endif %}
+
+{%- if use_streamlit %}
+
+# Streamlit
+streamlit:
+	streamlit run streamlit_app/app.py
+{%- endif %}
+
+# LangGraph Studio
+studio:
+	langgraph dev
+
+# Cleanup
+clean:
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name "htmlcov" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
+
+# Environment setup
+env-dev:
+	cp .env.example .env.development
+
+env-prod:
+	cp .env.example .env.production

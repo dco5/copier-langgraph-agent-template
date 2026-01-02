@@ -1,0 +1,28 @@
+# {{ project_name }} - Development Dockerfile
+FROM python:{{ python_version }}-slim
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+WORKDIR /app
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install all dependencies including dev
+RUN uv sync --frozen
+
+# Copy application code
+COPY src/ /app/src/
+
+# Set environment variables
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app"
+ENV PYTHONUNBUFFERED=1
+ENV APP_ENV=development
+
+# Expose port
+EXPOSE 8000
+
+# Run with reload for development
+CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--loop", "uvloop"]

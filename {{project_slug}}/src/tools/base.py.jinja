@@ -1,0 +1,87 @@
+"""Tool utilities with dependency injection support."""
+
+from collections.abc import Callable
+from functools import wraps
+from typing import Any
+
+from langchain_core.runnables import RunnableConfig
+
+
+class ToolContext:
+    """Context object for tool execution."""
+
+    def __init__(self, config: RunnableConfig | None = None):
+        self._configurable = (config or {}).get("configurable", {})
+
+    @property
+    def user_id(self) -> str | None:
+        return self._configurable.get("user_id")
+
+    @property
+    def thread_id(self) -> str | None:
+        return self._configurable.get("thread_id")
+
+    @property
+    def tenant_id(self) -> str | None:
+        return self._configurable.get("tenant_id")
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get a value from the configurable context."""
+        return self._configurable.get(key, default)
+
+
+def with_context[T](func: Callable[..., T]) -> Callable[..., T]:
+    """
+    Decorator to inject ToolContext into a tool function.
+
+    Usage:
+        @tool
+        @with_context
+        async def my_tool(query: str, *, ctx: ToolContext) -> str:
+            user_id = ctx.user_id
+            # ... use context in your tool
+    """
+    @wraps(func)
+    async def wrapper(*args: Any, config: RunnableConfig | None = None, **kwargs: Any) -> T:
+        ctx = ToolContext(config)
+        return await func(*args, ctx=ctx, **kwargs)
+    return wrapper
+
+
+{%- if use_auth %}
+
+
+class TenantContext:
+    """Multi-tenant context for row-level security."""
+
+    def __init__(self, tenant_id: str, user_id: str, thread_id: str):
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+        self.thread_id = thread_id
+
+    def validate_access(self, resource_tenant_id: str) -> bool:
+        """Validate tenant has access to resource."""
+        return self.tenant_id == resource_tenant_id
+
+    def get_namespace(self) -> str:
+        """Get namespace for memory/checkpoint storage."""
+        return f"{self.tenant_id}/{self.user_id}"
+
+    def get_checkpoint_namespace(self) -> dict[str, str]:
+        """Get configurable dict for checkpointer with tenant isolation."""
+        return {
+            "thread_id": f"{self.tenant_id}:{self.thread_id}",
+            "tenant_id": self.tenant_id,
+            "user_id": self.user_id,
+        }
+
+
+def require_tenant_context[T](func: Callable[..., T]) -> Callable[..., T]:
+    """Decorator to ensure tenant context is present."""
+    @wraps(func)
+    async def wrapper(*args: Any, tenant_ctx: TenantContext | None = None, **kwargs: Any) -> T:
+        if tenant_ctx is None:
+            raise ValueError("Tenant context required for this operation")
+        return await func(*args, tenant_ctx=tenant_ctx, **kwargs)
+    return wrapper
+{%- endif %}

@@ -1,0 +1,107 @@
+{%- if use_rate_limiting %}
+"""
+Rate limiting configuration using slowapi.
+"""
+
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+from src.core.config import settings
+{%- if use_prometheus %}
+from src.core.metrics import rate_limit_hits_total
+{%- endif %}
+
+
+def get_user_or_ip(request: Request) -> str:
+    """
+    Get rate limit key from user ID (if authenticated) or IP address.
+    This provides per-user rate limiting for authenticated users
+    and per-IP limiting for anonymous users.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        return f"user:{user_id}"
+    return f"ip:{get_remote_address(request)}"
+
+
+# Create limiter instance
+limiter = Limiter(
+    key_func=get_user_or_ip,
+    default_limits=[f"{settings.rate_limit_requests}/{settings.rate_limit_period}seconds"],
+    enabled=settings.rate_limit_enabled,
+    storage_uri="memory://",  # Use Redis in production: "redis://localhost:6379"
+)
+
+
+def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    """Handle rate limit exceeded errors."""
+{%- if use_prometheus %}
+    # Record metric
+    rate_limit_hits_total.labels(endpoint=request.url.path).inc()
+{%- endif %}
+
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": "rate_limit_exceeded",
+            "message": f"Rate limit exceeded. Try again in {exc.detail} seconds.",
+            "retry_after": exc.detail,
+        },
+        headers={
+            "Retry-After": str(exc.detail),
+            "X-RateLimit-Limit": str(settings.rate_limit_requests),
+        },
+    )
+
+
+# Predefined rate limit decorators for common use cases
+class RateLimits:
+    """Common rate limit configurations."""
+
+    # Standard API endpoints
+    STANDARD = f"{settings.rate_limit_requests}/{settings.rate_limit_period}seconds"
+
+    # Authentication endpoints (stricter)
+    AUTH = "10/minute"
+
+    # Agent invocation (more lenient for streaming)
+    AGENT = "30/minute"
+
+    # Health checks (very lenient)
+    HEALTH = "1000/minute"
+{%- else %}
+"""
+Rate limiting disabled - stub implementations.
+"""
+
+from fastapi import Request
+
+
+class StubLimiter:
+    """Stub limiter that does nothing."""
+
+    def limit(self, limit_string: str):
+        """No-op decorator."""
+        def decorator(func):
+            return func
+        return decorator
+
+
+limiter = StubLimiter()
+
+
+def rate_limit_exceeded_handler(request: Request, exc: Exception):
+    """Never called when rate limiting is disabled."""
+    pass
+
+
+class RateLimits:
+    """Stub rate limits."""
+    STANDARD = "unlimited"
+    AUTH = "unlimited"
+    AGENT = "unlimited"
+    HEALTH = "unlimited"
+{%- endif %}

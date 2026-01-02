@@ -1,0 +1,168 @@
+"""
+Python client for {{ project_name }} API.
+
+Use this client to integrate with the agent service from other applications.
+"""
+
+from typing import Any, AsyncGenerator
+import httpx
+
+
+class AgentClient:
+    """
+    Async client for interacting with the {{ project_name }} API.
+
+    Usage:
+        async with AgentClient("http://localhost:8000") as client:
+            response = await client.invoke("{{ agent_name }}", "Hello!")
+            print(response["content"])
+    """
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8000",
+        api_key: str | None = None,
+        timeout: float = 60.0,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.timeout = timeout
+        self._client: httpx.AsyncClient | None = None
+
+    @property
+    def headers(self) -> dict[str, str]:
+        """Get request headers."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    async def __aenter__(self) -> "AgentClient":
+        """Enter async context."""
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self.headers,
+            timeout=self.timeout,
+        )
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        """Exit async context."""
+        if self._client:
+            await self._client.aclose()
+
+    async def invoke(
+        self,
+        agent_name: str,
+        message: str,
+        thread_id: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Invoke an agent with a message.
+
+        Args:
+            agent_name: Name of the agent to invoke
+            message: User message
+            thread_id: Optional conversation thread ID
+            config: Optional additional configuration
+
+        Returns:
+            Agent response with content, messages, and metadata
+        """
+        if not self._client:
+            raise RuntimeError("Client not initialized. Use async context manager.")
+
+        response = await self._client.post(
+            f"/api/v1/agents/{agent_name}/invoke",
+            json={
+                "message": message,
+                "thread_id": thread_id,
+                "config": config or {},
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def stream(
+        self,
+        agent_name: str,
+        message: str,
+        thread_id: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream agent response tokens.
+
+        Args:
+            agent_name: Name of the agent to invoke
+            message: User message
+            thread_id: Optional conversation thread ID
+            config: Optional additional configuration
+
+        Yields:
+            Response tokens as they're generated
+        """
+        if not self._client:
+            raise RuntimeError("Client not initialized. Use async context manager.")
+
+        async with self._client.stream(
+            "POST",
+            f"/api/v1/agents/{agent_name}/stream",
+            json={
+                "message": message,
+                "thread_id": thread_id,
+                "config": config or {},
+            },
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    import json
+                    data = json.loads(line[6:])
+                    if "content" in data:
+                        yield data["content"]
+
+    async def get_agents(self) -> list[str]:
+        """Get list of available agents."""
+        if not self._client:
+            raise RuntimeError("Client not initialized. Use async context manager.")
+
+        response = await self._client.get("/api/v1/agents/list")
+        response.raise_for_status()
+        return response.json()
+
+    async def get_agents_info(self) -> dict[str, Any]:
+        """Get detailed information about all agents."""
+        if not self._client:
+            raise RuntimeError("Client not initialized. Use async context manager.")
+
+        response = await self._client.get("/api/v1/agents/info")
+        response.raise_for_status()
+        return response.json()
+
+    async def get_history(
+        self,
+        agent_name: str,
+        thread_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Get conversation history for a thread."""
+        if not self._client:
+            raise RuntimeError("Client not initialized. Use async context manager.")
+
+        response = await self._client.get(
+            f"/api/v1/agents/{agent_name}/history/{thread_id}",
+            params={"limit": limit},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def health_check(self) -> dict[str, Any]:
+        """Check service health."""
+        if not self._client:
+            raise RuntimeError("Client not initialized. Use async context manager.")
+
+        response = await self._client.get("/health")
+        response.raise_for_status()
+        return response.json()

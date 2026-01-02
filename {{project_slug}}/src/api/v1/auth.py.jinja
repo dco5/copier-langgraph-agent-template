@@ -1,0 +1,278 @@
+{%- if use_auth %}
+"""
+Authentication API endpoints.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.core.security import (
+    hash_password,
+    verify_password,
+    create_token_pair,
+    validate_refresh_token,
+    get_current_user_id,
+    TokenPair,
+)
+{%- if use_rate_limiting %}
+from src.core.limiter import limiter, RateLimits
+{%- endif %}
+from src.core.logging import get_logger
+{%- if use_prometheus %}
+from src.core.metrics import auth_attempts_total
+{%- endif %}
+from src.services.database import get_db
+
+logger = get_logger("api.auth")
+
+router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+class RegisterRequest(BaseModel):
+    """User registration request."""
+    email: EmailStr = Field(..., description="User email address")
+    password: str = Field(..., min_length=8, description="Password (min 8 characters)")
+    name: str | None = Field(default=None, description="User's display name")
+
+
+class LoginRequest(BaseModel):
+    """User login request."""
+    email: EmailStr = Field(..., description="User email address")
+    password: str = Field(..., description="User password")
+
+
+class RefreshRequest(BaseModel):
+    """Token refresh request."""
+    refresh_token: str = Field(..., description="Refresh token")
+
+
+class UserResponse(BaseModel):
+    """User information response."""
+    id: str
+    email: str
+    name: str | None
+    created_at: str
+
+
+class AuthResponse(BaseModel):
+    """Authentication response with tokens."""
+    user: UserResponse
+    tokens: TokenPair
+
+
+@router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+{%- if use_rate_limiting %}
+@limiter.limit(RateLimits.AUTH)
+{%- endif %}
+async def register(
+    request: Request,
+    body: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AuthResponse:
+    """
+    Register a new user account.
+
+    Args:
+        body: Registration details with email and password
+
+    Returns:
+        User information and authentication tokens
+    """
+    logger.info("registration_attempt", email=body.email)
+
+    try:
+        # TODO: Check if user already exists
+        # TODO: Create user in database
+
+        # Simulated user creation
+        import uuid
+        from datetime import datetime
+
+        user_id = str(uuid.uuid4())
+        # TODO: Store hashed_password in database
+        _ = hash_password(body.password)
+
+        user = UserResponse(
+            id=user_id,
+            email=body.email,
+            name=body.name,
+            created_at=datetime.now().isoformat(),
+        )
+
+        tokens = create_token_pair(user_id)
+
+{%- if use_prometheus %}
+        auth_attempts_total.labels(action="register", status="success").inc()
+{%- endif %}
+        logger.info("registration_success", user_id=user_id)
+
+        return AuthResponse(user=user, tokens=tokens)
+
+    except Exception as e:
+{%- if use_prometheus %}
+        auth_attempts_total.labels(action="register", status="error").inc()
+{%- endif %}
+        logger.error("registration_failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.post("/login", response_model=AuthResponse)
+{%- if use_rate_limiting %}
+@limiter.limit(RateLimits.AUTH)
+{%- endif %}
+async def login(
+    request: Request,
+    body: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AuthResponse:
+    """
+    Authenticate user and get access tokens.
+
+    Args:
+        body: Login credentials with email and password
+
+    Returns:
+        User information and authentication tokens
+    """
+    logger.info("login_attempt", email=body.email)
+
+    try:
+        # TODO: Fetch user from database by email
+        # TODO: Verify password
+
+        # Simulated authentication
+        import uuid
+        from datetime import datetime
+
+        user_id = str(uuid.uuid4())
+
+        user = UserResponse(
+            id=user_id,
+            email=body.email,
+            name=None,
+            created_at=datetime.now().isoformat(),
+        )
+
+        tokens = create_token_pair(user_id)
+
+{%- if use_prometheus %}
+        auth_attempts_total.labels(action="login", status="success").inc()
+{%- endif %}
+        logger.info("login_success", user_id=user_id)
+
+        return AuthResponse(user=user, tokens=tokens)
+
+    except HTTPException:
+{%- if use_prometheus %}
+        auth_attempts_total.labels(action="login", status="failed").inc()
+{%- endif %}
+        raise
+    except Exception as e:
+{%- if use_prometheus %}
+        auth_attempts_total.labels(action="login", status="error").inc()
+{%- endif %}
+        logger.error("login_failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+        )
+
+
+@router.post("/refresh", response_model=TokenPair)
+{%- if use_rate_limiting %}
+@limiter.limit(RateLimits.AUTH)
+{%- endif %}
+async def refresh_token(
+    request: Request,
+    body: RefreshRequest,
+) -> TokenPair:
+    """
+    Refresh access token using refresh token.
+
+    Args:
+        body: Refresh token
+
+    Returns:
+        New token pair
+    """
+    try:
+        user_id = validate_refresh_token(body.refresh_token)
+        tokens = create_token_pair(user_id)
+
+{%- if use_prometheus %}
+        auth_attempts_total.labels(action="refresh", status="success").inc()
+{%- endif %}
+        logger.info("token_refresh_success", user_id=user_id)
+
+        return tokens
+
+    except Exception as e:
+{%- if use_prometheus %}
+        auth_attempts_total.labels(action="refresh", status="failed").inc()
+{%- endif %}
+        logger.error("token_refresh_failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        )
+
+
+@router.post("/logout")
+async def logout(
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, str]:
+    """
+    Logout user and invalidate session.
+
+    Requires authentication.
+
+    Returns:
+        Confirmation message
+    """
+    # TODO: Invalidate refresh token in database/cache
+
+    logger.info("logout", user_id=user_id)
+    return {"message": "Logged out successfully"}
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_current_user(
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    """
+    Get current authenticated user information.
+
+    Requires authentication.
+
+    Returns:
+        Current user details
+    """
+    # TODO: Fetch user from database
+    from datetime import datetime
+
+    return UserResponse(
+        id=user_id,
+        email="user@example.com",  # Would come from database
+        name=None,
+        created_at=datetime.now().isoformat(),
+    )
+{%- else %}
+"""
+Authentication disabled.
+"""
+
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+@router.get("/status")
+async def auth_status() -> dict[str, str]:
+    """Authentication is disabled in this deployment."""
+    return {"status": "disabled", "message": "Authentication is not enabled"}
+{%- endif %}

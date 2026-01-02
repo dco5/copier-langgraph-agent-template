@@ -1,0 +1,282 @@
+"""
+Agent API endpoints with invoke, stream, and info routes.
+"""
+
+import json
+from collections.abc import AsyncGenerator
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
+
+from src.agents.base import AgentResponse
+from src.agents.registry import get_agent, get_agents_info, list_agents
+{%- if use_auth %}
+from src.core.security import get_current_user_id, get_optional_user_id
+{%- endif %}
+{%- if use_rate_limiting %}
+from src.core.limiter import limiter, RateLimits
+{%- endif %}
+from src.core.logging import get_logger
+
+logger = get_logger("api.agents")
+
+router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+class InvokeRequest(BaseModel):
+    """Request body for agent invocation."""
+    message: str = Field(..., description="User message to send to the agent")
+    thread_id: str | None = Field(default=None, description="Conversation thread ID")
+    config: dict[str, Any] = Field(default_factory=dict, description="Additional configuration")
+
+
+class StreamRequest(BaseModel):
+    """Request body for streaming agent invocation."""
+    message: str = Field(..., description="User message to send to the agent")
+    thread_id: str | None = Field(default=None, description="Conversation thread ID")
+    config: dict[str, Any] = Field(default_factory=dict, description="Additional configuration")
+
+
+class AgentInfo(BaseModel):
+    """Agent information response."""
+    name: str
+    description: str
+    model: str
+    tools: list[str]
+    memory_enabled: bool
+
+
+class AgentsInfoResponse(BaseModel):
+    """Response for /agents/info endpoint."""
+    agents: dict[str, AgentInfo]
+    default_agent: str
+    total_count: int
+
+
+@router.get("/info", response_model=AgentsInfoResponse)
+async def get_agents_info_endpoint() -> AgentsInfoResponse:
+    """
+    Get information about all available agents.
+
+    Returns:
+        Information about all registered agents including their
+        capabilities, models, and available tools.
+    """
+    info = get_agents_info()
+    return AgentsInfoResponse(**info)
+
+
+@router.get("/list")
+async def list_agents_endpoint() -> list[str]:
+    """
+    List all available agent names.
+
+    Returns:
+        List of agent names that can be used in invoke/stream endpoints.
+    """
+    return list_agents()
+
+
+@router.post("/{agent_name}/invoke", response_model=AgentResponse)
+{%- if use_rate_limiting %}
+@limiter.limit(RateLimits.AGENT)
+{%- endif %}
+async def invoke_agent(
+    agent_name: str,
+    request: Request,
+    body: InvokeRequest,
+{%- if use_auth %}
+    user_id: str | None = Depends(get_optional_user_id),
+{%- endif %}
+) -> AgentResponse:
+    """
+    Invoke an agent with a message and get a complete response.
+
+    Args:
+        agent_name: Name of the agent to invoke
+        body: Request body with message and optional thread_id
+{%- if use_auth %}
+        user_id: Authenticated user ID (optional)
+{%- endif %}
+
+    Returns:
+        Complete agent response with content and metadata
+    """
+    try:
+        agent = get_agent(agent_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    logger.info(
+        "agent_invoke_request",
+        agent=agent_name,
+        thread_id=body.thread_id,
+{%- if use_auth %}
+        user_id=user_id,
+{%- endif %}
+    )
+
+    try:
+        response = await agent.invoke(
+            message=body.message,
+            thread_id=body.thread_id,
+{%- if use_auth %}
+            user_id=user_id,
+{%- else %}
+            user_id=None,
+{%- endif %}
+            config=body.config,
+        )
+        return response
+
+    except Exception as e:
+        logger.error(
+            "agent_invoke_error",
+            agent=agent_name,
+            error=str(e),
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{agent_name}/stream")
+{%- if use_rate_limiting %}
+@limiter.limit(RateLimits.AGENT)
+{%- endif %}
+async def stream_agent(
+    agent_name: str,
+    request: Request,
+    body: StreamRequest,
+{%- if use_auth %}
+    user_id: str | None = Depends(get_optional_user_id),
+{%- endif %}
+) -> EventSourceResponse:
+    """
+    Stream agent response as Server-Sent Events (SSE).
+
+    Args:
+        agent_name: Name of the agent to invoke
+        body: Request body with message and optional thread_id
+{%- if use_auth %}
+        user_id: Authenticated user ID (optional)
+{%- endif %}
+
+    Returns:
+        SSE stream of agent response tokens
+    """
+    try:
+        agent = get_agent(agent_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    logger.info(
+        "agent_stream_request",
+        agent=agent_name,
+        thread_id=body.thread_id,
+{%- if use_auth %}
+        user_id=user_id,
+{%- endif %}
+    )
+
+    async def event_generator() -> AsyncGenerator[dict, None]:
+        """Generate SSE events from agent stream."""
+        try:
+            async for token in agent.stream(
+                message=body.message,
+                thread_id=body.thread_id,
+{%- if use_auth %}
+                user_id=user_id,
+{%- else %}
+                user_id=None,
+{%- endif %}
+                config=body.config,
+            ):
+                yield {
+                    "event": "token",
+                    "data": json.dumps({"content": token}),
+                }
+
+            # Send completion event
+            yield {
+                "event": "done",
+                "data": json.dumps({"status": "complete"}),
+            }
+
+        except Exception as e:
+            logger.error(
+                "agent_stream_error",
+                agent=agent_name,
+                error=str(e),
+            )
+            yield {
+                "event": "error",
+                "data": json.dumps({"error": str(e)}),
+            }
+
+    return EventSourceResponse(event_generator())
+
+
+@router.get("/{agent_name}/history/{thread_id}")
+async def get_agent_history(
+    agent_name: str,
+    thread_id: str,
+    limit: int = 50,
+{%- if use_auth %}
+    user_id: str | None = Depends(get_optional_user_id),
+{%- endif %}
+) -> list[dict[str, Any]]:
+    """
+    Get conversation history for a specific thread.
+
+    Args:
+        agent_name: Name of the agent
+        thread_id: Conversation thread ID
+        limit: Maximum number of messages to return
+{%- if use_auth %}
+        user_id: Authenticated user ID (optional)
+{%- endif %}
+
+    Returns:
+        List of messages in the conversation
+    """
+    try:
+        agent = get_agent(agent_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    history = await agent.get_history(thread_id, limit=limit)
+    return history
+
+
+{%- if use_auth %}
+
+
+@router.delete("/{agent_name}/history/{thread_id}")
+async def clear_agent_history(
+    agent_name: str,
+    thread_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> dict[str, str]:
+    """
+    Clear conversation history for a specific thread.
+    Requires authentication.
+
+    Args:
+        agent_name: Name of the agent
+        thread_id: Conversation thread ID to clear
+        user_id: Authenticated user ID
+
+    Returns:
+        Confirmation message
+    """
+    # TODO: Implement history clearing
+    logger.info(
+        "clear_history_request",
+        agent=agent_name,
+        thread_id=thread_id,
+        user_id=user_id,
+    )
+
+    return {"message": f"History cleared for thread {thread_id}"}
+{%- endif %}

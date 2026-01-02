@@ -1,0 +1,273 @@
+"""
+LLM service with automatic retry logic, observability, and multi-provider support.
+"""
+
+import time
+from collections.abc import AsyncGenerator
+from typing import Any
+
+{%- if llm_provider == 'openai' %}
+from langchain_openai import ChatOpenAI
+{%- elif llm_provider == 'anthropic' %}
+from langchain_anthropic import ChatAnthropic
+{%- elif llm_provider == 'azure' %}
+from langchain_openai import AzureChatOpenAI
+{%- elif llm_provider == 'ollama' %}
+from langchain_ollama import ChatOllama
+{%- endif %}
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage
+{%- if observability == 'langfuse' %}
+from langfuse.callback import CallbackHandler as LangfuseCallbackHandler
+{%- elif observability == 'langsmith' %}
+from langsmith import Client as LangSmithClient
+{%- endif %}
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    before_sleep_log,
+)
+
+from src.core.config import settings
+from src.core.logging import get_logger
+{%- if use_prometheus %}
+from src.core.metrics import record_llm_request, llm_retry_count
+{%- endif %}
+
+logger = get_logger("llm")
+
+
+# Exceptions that should trigger retry
+RETRYABLE_EXCEPTIONS = (
+    TimeoutError,
+    ConnectionError,
+)
+
+
+class LLMService:
+    """
+    LLM service with:
+    - {{ llm_provider | title }} provider support
+    - Automatic retry with exponential backoff
+{%- if observability != 'none' %}
+    - {{ observability | title }} observability integration
+{%- endif %}
+    - Token counting and metrics
+    """
+
+    def __init__(
+        self,
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ):
+        self.model = model or settings.default_llm_model
+        self.temperature = temperature or settings.default_llm_temperature
+        self.max_tokens = max_tokens or settings.max_tokens
+        self.extra_kwargs = kwargs
+
+        self._llm: BaseChatModel | None = None
+{%- if observability == 'langfuse' %}
+        self._langfuse_handler: LangfuseCallbackHandler | None = None
+{%- endif %}
+
+    @property
+    def llm(self) -> BaseChatModel:
+        """Get or create the LLM instance."""
+        if self._llm is None:
+            self._llm = self._create_llm()
+        return self._llm
+
+{%- if observability == 'langfuse' %}
+
+    @property
+    def langfuse_handler(self) -> LangfuseCallbackHandler | None:
+        """Get Langfuse callback handler for observability."""
+        if self._langfuse_handler is None and settings.langfuse_enabled:
+            if settings.langfuse_public_key and settings.langfuse_secret_key:
+                self._langfuse_handler = LangfuseCallbackHandler(
+                    public_key=settings.langfuse_public_key,
+                    secret_key=settings.langfuse_secret_key,
+                    host=settings.langfuse_host,
+                )
+        return self._langfuse_handler
+{%- endif %}
+
+    def _create_llm(self) -> BaseChatModel:
+        """Create LLM instance."""
+        common_kwargs = {
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "timeout": settings.llm_request_timeout,
+            **self.extra_kwargs,
+        }
+
+{%- if llm_provider == 'openai' %}
+        if not settings.openai_api_key:
+            raise ValueError("OpenAI API key not configured")
+
+        return ChatOpenAI(
+            model=self.model,
+            api_key=settings.openai_api_key,
+            **common_kwargs,
+        )
+{%- elif llm_provider == 'anthropic' %}
+        if not settings.anthropic_api_key:
+            raise ValueError("Anthropic API key not configured")
+
+        return ChatAnthropic(
+            model=self.model,
+            api_key=settings.anthropic_api_key,
+            **common_kwargs,
+        )
+{%- elif llm_provider == 'azure' %}
+        if not settings.azure_openai_api_key or not settings.azure_openai_endpoint:
+            raise ValueError("Azure OpenAI API key and endpoint not configured")
+
+        return AzureChatOpenAI(
+            azure_deployment=self.model,
+            api_key=settings.azure_openai_api_key,
+            azure_endpoint=settings.azure_openai_endpoint,
+            api_version=settings.azure_openai_api_version,
+            **common_kwargs,
+        )
+{%- elif llm_provider == 'ollama' %}
+        return ChatOllama(
+            model=self.model,
+            base_url=settings.ollama_base_url,
+            **common_kwargs,
+        )
+{%- endif %}
+
+    def get_callbacks(self, **extra_metadata: Any) -> list:
+        """Get callbacks for LLM invocation."""
+        callbacks = []
+
+{%- if observability == 'langfuse' %}
+        if self.langfuse_handler:
+            callbacks.append(self.langfuse_handler)
+{%- endif %}
+
+        return callbacks
+
+    @retry(
+        retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        before_sleep=before_sleep_log(logger, "WARNING"),
+    )
+    async def invoke(
+        self,
+        messages: list[BaseMessage],
+        **kwargs: Any,
+    ) -> BaseMessage:
+        """
+        Invoke LLM with automatic retry on transient failures.
+        """
+        start_time = time.perf_counter()
+        status = "success"
+
+        try:
+            callbacks = self.get_callbacks(**kwargs.pop("metadata", {}))
+
+            response = await self.llm.ainvoke(
+                messages,
+                config={"callbacks": callbacks},
+                **kwargs,
+            )
+
+            return response
+
+        except RETRYABLE_EXCEPTIONS as e:
+            status = "retry"
+{%- if use_prometheus %}
+            llm_retry_count.labels(model=self.model, reason=type(e).__name__).inc()
+{%- endif %}
+            raise
+
+        except Exception as e:
+            status = "error"
+            logger.error(
+                "llm_invocation_failed",
+                model=self.model,
+                error=str(e),
+            )
+            raise
+
+        finally:
+            duration = time.perf_counter() - start_time
+{%- if use_prometheus %}
+            record_llm_request(self.model, status, duration)
+{%- endif %}
+
+            logger.debug(
+                "llm_invocation_completed",
+                model=self.model,
+                duration=round(duration, 3),
+                status=status,
+            )
+
+    async def stream(
+        self,
+        messages: list[BaseMessage],
+        **kwargs: Any,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream LLM response tokens.
+        """
+        start_time = time.perf_counter()
+
+        try:
+            callbacks = self.get_callbacks(**kwargs.pop("metadata", {}))
+
+            async for chunk in self.llm.astream(
+                messages,
+                config={"callbacks": callbacks},
+                **kwargs,
+            ):
+                if chunk.content:
+                    yield chunk.content
+
+            duration = time.perf_counter() - start_time
+{%- if use_prometheus %}
+            record_llm_request(self.model, "success", duration)
+{%- endif %}
+
+        except Exception as e:
+            duration = time.perf_counter() - start_time
+{%- if use_prometheus %}
+            record_llm_request(self.model, "error", duration)
+{%- endif %}
+            logger.error(
+                "llm_stream_failed",
+                model=self.model,
+                error=str(e),
+            )
+            raise
+
+
+def get_llm(
+    model: str | None = None,
+    temperature: float | None = None,
+    **kwargs: Any,
+) -> BaseChatModel:
+    """
+    Get a configured LLM instance.
+    Convenience function for simple use cases.
+    """
+    service = LLMService(model=model, temperature=temperature, **kwargs)
+    return service.llm
+
+
+def get_llm_service(
+    model: str | None = None,
+    temperature: float | None = None,
+    **kwargs: Any,
+) -> LLMService:
+    """
+    Get an LLM service instance with full functionality.
+    """
+    return LLMService(model=model, temperature=temperature, **kwargs)

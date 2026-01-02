@@ -1,0 +1,172 @@
+"""
+Unit tests for agents.
+"""
+
+import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
+
+from src.agents.base import AgentConfig, AgentResponse, AgentState
+from src.agents.{{ agent_name }} import {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent, create_{{ agent_name }}
+from src.agents.registry import AgentRegistry, get_agent, list_agents
+
+
+class TestAgentConfig:
+    """Tests for AgentConfig."""
+
+    def test_default_config(self):
+        """Test default configuration values."""
+        config = AgentConfig()
+
+        assert config.model == "{{ default_model }}"
+        assert config.temperature == 0.7
+        assert config.max_tokens == 4096
+        assert config.memory_enabled is True
+        assert config.tools == []
+
+    def test_custom_config(self):
+        """Test custom configuration."""
+        config = AgentConfig(
+            model="custom-model",
+            temperature=0.5,
+            max_tokens=2048,
+            memory_enabled=False,
+        )
+
+        assert config.model == "custom-model"
+        assert config.temperature == 0.5
+        assert config.max_tokens == 2048
+        assert config.memory_enabled is False
+
+
+class TestAgentResponse:
+    """Tests for AgentResponse."""
+
+    def test_response_creation(self):
+        """Test creating an agent response."""
+        response = AgentResponse(
+            content="Hello, how can I help?",
+            thread_id="thread-123",
+            metadata={"tokens": 50},
+        )
+
+        assert response.content == "Hello, how can I help?"
+        assert response.thread_id == "thread-123"
+        assert response.metadata["tokens"] == 50
+        assert response.messages == []
+
+    def test_response_with_messages(self):
+        """Test response with message history."""
+        response = AgentResponse(
+            content="Done!",
+            messages=[
+                {"type": "human", "content": "Hi"},
+                {"type": "ai", "content": "Done!"},
+            ],
+        )
+
+        assert len(response.messages) == 2
+
+
+class TestAgentRegistry:
+    """Tests for AgentRegistry."""
+
+    def test_list_agents(self):
+        """Test listing available agents."""
+        registry = AgentRegistry()
+        agents = registry.list_agents()
+
+        assert "{{ agent_name }}" in agents
+
+    def test_get_agent(self):
+        """Test getting an agent by name."""
+        registry = AgentRegistry()
+        agent = registry.get("{{ agent_name }}")
+
+        assert agent is not None
+        assert agent.name == "{{ agent_name }}"
+
+    def test_get_unknown_agent(self):
+        """Test getting an unknown agent raises error."""
+        registry = AgentRegistry()
+
+        with pytest.raises(ValueError, match="Unknown agent"):
+            registry.get("nonexistent_agent")
+
+    def test_agent_info(self):
+        """Test getting agent information."""
+        registry = AgentRegistry()
+        info = registry.info()
+
+        assert "agents" in info
+        assert "default_agent" in info
+        assert info["default_agent"] == "{{ agent_name }}"
+
+    def test_clear_cache(self):
+        """Test clearing agent cache."""
+        registry = AgentRegistry()
+
+        # Get agent to cache it
+        registry.get("{{ agent_name }}")
+        assert "{{ agent_name }}" in registry._instances
+
+        # Clear cache
+        registry.clear_cache()
+        assert "{{ agent_name }}" not in registry._instances
+
+
+class Test{{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent:
+    """Tests for {{ agent_name | replace('_', ' ') | title | replace(' ', '') }}Agent."""
+
+    def test_agent_creation(self):
+        """Test creating {{ agent_name }} agent."""
+        agent = create_{{ agent_name }}()
+
+        assert agent.name == "{{ agent_name }}"
+
+    def test_agent_with_config(self):
+        """Test creating agent with custom config."""
+        config = AgentConfig(model="custom-model", temperature=0.3)
+        agent = create_{{ agent_name }}(config)
+
+        assert agent.config.model == "custom-model"
+        assert agent.config.temperature == 0.3
+
+    def test_get_tools(self):
+        """Test getting agent tools."""
+        agent = create_{{ agent_name }}()
+        tools = agent.get_tools()
+
+        assert len(tools) > 0
+        tool_names = [t.name for t in tools]
+        assert "example_search" in tool_names
+
+    def test_get_system_prompt(self):
+        """Test getting system prompt."""
+        agent = create_{{ agent_name }}()
+        prompt = agent.get_system_prompt()
+
+        assert prompt is not None
+        assert len(prompt) > 0
+
+    def test_agent_info(self):
+        """Test getting agent info."""
+        agent = create_{{ agent_name }}()
+        info = agent.info()
+
+        assert info["name"] == "{{ agent_name }}"
+        assert "tools" in info
+        assert len(info["tools"]) > 0
+
+
+class TestGlobalFunctions:
+    """Tests for global convenience functions."""
+
+    def test_get_agent_function(self):
+        """Test get_agent global function."""
+        agent = get_agent("{{ agent_name }}")
+        assert agent.name == "{{ agent_name }}"
+
+    def test_list_agents_function(self):
+        """Test list_agents global function."""
+        agents = list_agents()
+        assert "{{ agent_name }}" in agents

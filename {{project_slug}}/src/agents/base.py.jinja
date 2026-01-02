@@ -1,0 +1,349 @@
+"""
+Base agent class providing common functionality for all agents.
+"""
+
+from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator
+from typing import Any
+
+from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.graph import StateGraph
+from langgraph.graph.state import CompiledStateGraph
+{%- if database == 'postgresql' %}
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+{%- elif database == 'sqlite' %}
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+{%- else %}
+from langgraph.checkpoint.memory import MemorySaver
+{%- endif %}
+from pydantic import BaseModel, Field
+
+from src.core.config import settings
+from src.core.logging import get_logger
+{%- if use_prometheus %}
+from src.core.metrics import record_agent_invocation
+{%- endif %}
+from src.services.llm import get_llm
+
+logger = get_logger("agent")
+
+
+class AgentState(BaseModel):
+    """Base state for all agents."""
+    messages: list[BaseMessage] = Field(default_factory=list)
+    user_id: str | None = None
+    thread_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentConfig(BaseModel):
+    """Configuration for agent behavior."""
+    model: str = settings.default_llm_model
+    temperature: float = settings.default_llm_temperature
+    max_tokens: int = settings.max_tokens
+    system_prompt: str | None = None
+    tools: list[str] = Field(default_factory=list)
+    memory_enabled: bool = True
+
+
+class AgentResponse(BaseModel):
+    """Structured response from agent invocation."""
+    content: str
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    thread_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    def pretty_print(self) -> None:
+        """Print response in a readable format."""
+        print(f"\n{'=' * 40}")
+        print(f"Thread: {self.thread_id}")
+        print(f"{'=' * 40}")
+        print(self.content)
+        print(f"{'=' * 40}\n")
+
+
+class BaseAgent(ABC):
+    """
+    Abstract base class for LangGraph agents.
+
+    Provides:
+    - Graph compilation with checkpointing
+    - Invoke/stream methods
+{%- if use_prometheus %}
+    - Metrics and logging integration
+{%- endif %}
+    - Memory management hooks
+    """
+
+    name: str = "base_agent"
+    description: str = "Base agent"
+
+    def __init__(self, config: AgentConfig | None = None):
+        self.config = config or AgentConfig()
+        self._graph: CompiledStateGraph | None = None
+{%- if database == 'postgresql' %}
+        self._checkpointer: AsyncPostgresSaver | None = None
+{%- elif database == 'sqlite' %}
+        self._checkpointer: AsyncSqliteSaver | None = None
+{%- else %}
+        self._checkpointer: MemorySaver | None = None
+{%- endif %}
+
+    @property
+    def llm(self):
+        """Get configured LLM for this agent."""
+        return get_llm(
+            model=self.config.model,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+        )
+
+    @abstractmethod
+    def get_tools(self) -> list:
+        """Return list of tools available to this agent."""
+        pass
+
+    @abstractmethod
+    def build_graph(self) -> StateGraph:
+        """Build the agent's LangGraph state graph."""
+        pass
+
+    def get_system_prompt(self) -> str | None:
+        """Get system prompt for the agent."""
+        if self.config.system_prompt:
+            return self.config.system_prompt
+
+        # Try to load from prompts directory
+        try:
+            from pathlib import Path
+            prompt_path = Path(__file__).parent.parent / "prompts" / f"{self.name}.md"
+            if prompt_path.exists():
+                return prompt_path.read_text()
+        except Exception:
+            pass
+
+        return None
+
+{%- if database == 'postgresql' %}
+
+    async def get_checkpointer(self) -> AsyncPostgresSaver:
+        """Get or create async checkpointer for state persistence."""
+        if self._checkpointer is None:
+            self._checkpointer = AsyncPostgresSaver.from_conn_string(
+                settings.database_url_sync
+            )
+            await self._checkpointer.setup()
+        return self._checkpointer
+{%- elif database == 'sqlite' %}
+
+    async def get_checkpointer(self) -> AsyncSqliteSaver:
+        """Get or create async checkpointer for state persistence."""
+        if self._checkpointer is None:
+            self._checkpointer = AsyncSqliteSaver.from_conn_string(
+                settings.sqlite_path
+            )
+            await self._checkpointer.setup()
+        return self._checkpointer
+{%- else %}
+
+    async def get_checkpointer(self) -> MemorySaver:
+        """Get or create in-memory checkpointer (no persistence)."""
+        if self._checkpointer is None:
+            self._checkpointer = MemorySaver()
+        return self._checkpointer
+{%- endif %}
+
+    async def get_graph(self) -> CompiledStateGraph:
+        """Get or compile the agent graph."""
+        if self._graph is None:
+            graph = self.build_graph()
+            checkpointer = await self.get_checkpointer()
+            self._graph = graph.compile(checkpointer=checkpointer)
+        return self._graph
+
+    async def invoke(
+        self,
+        message: str,
+        thread_id: str | None = None,
+        user_id: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> AgentResponse:
+        """
+        Invoke the agent with a message.
+
+        Args:
+            message: User message
+            thread_id: Conversation thread ID for memory
+            user_id: User ID for personalization
+            config: Additional configuration
+
+        Returns:
+            AgentResponse with content and metadata
+        """
+        import time
+        import uuid
+
+        start_time = time.perf_counter()
+        thread_id = thread_id or str(uuid.uuid4())
+        status = "success"
+
+        try:
+            graph = await self.get_graph()
+
+            # Build input state
+            input_state = {
+                "messages": [HumanMessage(content=message)],
+                "user_id": user_id,
+                "thread_id": thread_id,
+            }
+
+            # Build config with thread ID for checkpointing
+            run_config = {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "user_id": user_id,
+                },
+                **(config or {}),
+            }
+
+            # Invoke graph
+            result = await graph.ainvoke(input_state, config=run_config)
+
+            # Extract response
+            messages = result.get("messages", [])
+            last_message = messages[-1] if messages else None
+            content = last_message.content if last_message else ""
+
+            return AgentResponse(
+                content=content,
+                messages=[self._serialize_message(m) for m in messages],
+                thread_id=thread_id,
+                metadata=result.get("metadata", {}),
+            )
+
+        except Exception as e:
+            status = "error"
+            logger.error(
+                "agent_invoke_failed",
+                agent=self.name,
+                error=str(e),
+            )
+            raise
+
+        finally:
+            duration = time.perf_counter() - start_time
+{%- if use_prometheus %}
+            record_agent_invocation(self.name, status, duration)
+{%- endif %}
+            logger.info(
+                "agent_invoke_completed",
+                agent=self.name,
+                thread_id=thread_id,
+                duration=round(duration, 3),
+            )
+
+    async def stream(
+        self,
+        message: str,
+        thread_id: str | None = None,
+        user_id: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream agent response tokens.
+
+        Args:
+            message: User message
+            thread_id: Conversation thread ID
+            user_id: User ID for personalization
+            config: Additional configuration
+
+        Yields:
+            Response tokens as they're generated
+        """
+        import uuid
+
+        thread_id = thread_id or str(uuid.uuid4())
+
+        try:
+            graph = await self.get_graph()
+
+            input_state = {
+                "messages": [HumanMessage(content=message)],
+                "user_id": user_id,
+                "thread_id": thread_id,
+            }
+
+            run_config = {
+                "configurable": {
+                    "thread_id": thread_id,
+                    "user_id": user_id,
+                },
+                **(config or {}),
+            }
+
+            async for event in graph.astream_events(
+                input_state,
+                config=run_config,
+                version="v2",
+            ):
+                kind = event["event"]
+
+                # Stream LLM tokens
+                if kind == "on_chat_model_stream":
+                    content = event["data"]["chunk"].content
+                    if content:
+                        yield content
+
+        except Exception as e:
+            logger.error(
+                "agent_stream_failed",
+                agent=self.name,
+                error=str(e),
+            )
+            raise
+
+    async def get_history(
+        self,
+        thread_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Get conversation history for a thread."""
+        try:
+            graph = await self.get_graph()
+            state = await graph.aget_state(
+                {"configurable": {"thread_id": thread_id}}
+            )
+
+            if state and state.values:
+                messages = state.values.get("messages", [])
+                return [self._serialize_message(m) for m in messages[-limit:]]
+
+            return []
+
+        except Exception as e:
+            logger.error(
+                "get_history_failed",
+                agent=self.name,
+                thread_id=thread_id,
+                error=str(e),
+            )
+            return []
+
+    def _serialize_message(self, message: BaseMessage) -> dict[str, Any]:
+        """Serialize a message for API response."""
+        return {
+            "type": message.type,
+            "content": message.content,
+            "additional_kwargs": message.additional_kwargs,
+        }
+
+    def info(self) -> dict[str, Any]:
+        """Return agent information."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "model": self.config.model,
+            "tools": [t.name for t in self.get_tools()],
+            "memory_enabled": self.config.memory_enabled,
+        }

@@ -1,0 +1,24 @@
+"""
+Main API router that aggregates all v1 routes.
+"""
+
+from fastapi import APIRouter
+
+from src.api.v1.agents import router as agents_router
+{%- if use_auth %}
+from src.api.v1.auth import router as auth_router
+{%- endif %}
+from src.api.v1.health import router as health_router
+
+# Create main v1 router
+api_router = APIRouter(prefix="/api/v1")
+
+# Include all sub-routers
+api_router.include_router(agents_router)
+{%- if use_auth %}
+api_router.include_router(auth_router)
+{%- endif %}
+
+# Health routes at root level (not under /api/v1)
+root_router = APIRouter()
+root_router.include_router(health_router)

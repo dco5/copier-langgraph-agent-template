@@ -1,0 +1,269 @@
+"""
+Async database service with connection pooling and health checks.
+"""
+
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
+{%- if database == 'postgresql' %}
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import declarative_base
+
+from src.core.config import settings
+from src.core.logging import get_logger
+{%- if use_prometheus %}
+from src.core.metrics import db_connections_active, db_query_duration_seconds
+{%- endif %}
+
+logger = get_logger("database")
+
+# Create async engine
+engine = create_async_engine(
+    settings.database_url,
+    echo=settings.debug,
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True,
+    pool_recycle=3600,
+)
+
+# Session factory
+async_session_factory = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autocommit=False,
+    autoflush=False,
+)
+
+# Base for models
+Base = declarative_base()
+
+
+@asynccontextmanager
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Get an async database session.
+    Use as async context manager.
+    """
+    session = async_session_factory()
+{%- if use_prometheus %}
+    db_connections_active.inc()
+{%- endif %}
+
+    try:
+        yield session
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        logger.error("database_transaction_failed", error=str(e))
+        raise
+    finally:
+        await session.close()
+{%- if use_prometheus %}
+        db_connections_active.dec()
+{%- endif %}
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """
+    FastAPI dependency for database sessions.
+    """
+    async with get_session() as session:
+        yield session
+
+
+async def init_db() -> None:
+    """
+    Initialize database (create tables).
+    Call on application startup.
+    """
+    async with engine.begin() as conn:
+        # Create tables
+        await conn.run_sync(Base.metadata.create_all)
+        logger.info("database_initialized")
+
+
+async def check_db_health() -> dict:
+    """
+    Check database connectivity and return status.
+    """
+    try:
+        async with get_session() as session:
+            result = await session.execute(text("SELECT 1"))
+            result.fetchone()
+
+        return {
+            "status": "healthy",
+            "database": "connected",
+        }
+    except Exception as e:
+        logger.error("database_health_check_failed", error=str(e))
+        return {
+            "status": "unhealthy",
+            "database": "disconnected",
+            "error": str(e),
+        }
+
+
+async def close_db() -> None:
+    """
+    Close database connections.
+    Call on application shutdown.
+    """
+    await engine.dispose()
+    logger.info("database_connections_closed")
+
+
+class DatabaseService:
+    """
+    Database service for common operations.
+    Wraps session management with metrics.
+    """
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def execute(self, query, params=None):
+        """Execute a query with timing metrics."""
+        import time
+
+        start = time.perf_counter()
+        try:
+            result = await self.session.execute(query, params)
+            return result
+        finally:
+            duration = time.perf_counter() - start
+{%- if use_prometheus %}
+            db_query_duration_seconds.labels(operation="execute").observe(duration)
+{%- endif %}
+
+    async def commit(self):
+        """Commit the current transaction."""
+        await self.session.commit()
+
+    async def rollback(self):
+        """Rollback the current transaction."""
+        await self.session.rollback()
+
+{%- elif database == 'sqlite' %}
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import declarative_base
+from pathlib import Path
+
+from src.core.config import settings
+from src.core.logging import get_logger
+
+logger = get_logger("database")
+
+# Ensure data directory exists
+Path(settings.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
+
+# Create async engine for SQLite
+engine = create_async_engine(
+    settings.database_url,
+    echo=settings.debug,
+)
+
+# Session factory
+async_session_factory = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+# Base for models
+Base = declarative_base()
+
+
+@asynccontextmanager
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Get an async database session."""
+    session = async_session_factory()
+    try:
+        yield session
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        logger.error("database_transaction_failed", error=str(e))
+        raise
+    finally:
+        await session.close()
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI dependency for database sessions."""
+    async with get_session() as session:
+        yield session
+
+
+async def init_db() -> None:
+    """Initialize database."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        logger.info("database_initialized")
+
+
+async def check_db_health() -> dict:
+    """Check database connectivity."""
+    try:
+        async with get_session() as session:
+            result = await session.execute(text("SELECT 1"))
+            result.fetchone()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        logger.error("database_health_check_failed", error=str(e))
+        return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
+
+
+async def close_db() -> None:
+    """Close database connections."""
+    await engine.dispose()
+    logger.info("database_connections_closed")
+
+{%- else %}
+# In-memory database (no persistence)
+from src.core.logging import get_logger
+
+logger = get_logger("database")
+
+
+class Base:
+    """Stub base class for models."""
+    pass
+
+
+async def get_db():
+    """No-op database dependency."""
+    yield None
+
+
+async def get_session():
+    """No-op session context manager."""
+    yield None
+
+
+async def init_db() -> None:
+    """No-op initialization."""
+    logger.info("Using in-memory storage (no persistence)")
+
+
+async def check_db_health() -> dict:
+    """Always healthy for in-memory."""
+    return {"status": "healthy", "database": "in-memory"}
+
+
+async def close_db() -> None:
+    """No-op close."""
+    pass
+{%- endif %}

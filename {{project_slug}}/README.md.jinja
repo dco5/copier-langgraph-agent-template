@@ -1,0 +1,216 @@
+# {{ project_name }}
+
+{{ project_description }}
+
+## Features
+
+- **LangGraph Agent Framework**: Production-ready agent architecture with state persistence
+- **{{ llm_provider | title }} LLM**: Powered by {{ default_model }}
+{%- if database == 'postgresql' %}
+- **PostgreSQL Backend**: Durable state checkpointing with pgvector support
+{%- elif database == 'sqlite' %}
+- **SQLite Backend**: Lightweight file-based persistence
+{%- else %}
+- **In-Memory Storage**: Fast development with no persistence
+{%- endif %}
+- **FastAPI REST API**: Modern async API with OpenAPI documentation
+- **Streaming Support**: Real-time response streaming via SSE
+{%- if use_auth %}
+- **JWT Authentication**: Secure token-based authentication
+{%- endif %}
+{%- if use_rate_limiting %}
+- **Rate Limiting**: Configurable per-user/IP rate limits
+{%- endif %}
+{%- if use_prometheus %}
+- **Prometheus Metrics**: Built-in observability with Grafana dashboards
+{%- endif %}
+{%- if observability == 'langfuse' %}
+- **Langfuse Integration**: LLM observability and tracing
+{%- elif observability == 'langsmith' %}
+- **LangSmith Integration**: LangChain's observability platform
+{%- endif %}
+{%- if use_docker %}
+- **Docker Support**: Development and production Docker configurations
+{%- endif %}
+{%- if use_streamlit %}
+- **Streamlit UI**: Interactive chat interface for prototyping
+{%- endif %}
+
+## Quick Start
+
+### Prerequisites
+
+- Python {{ python_version }}+
+- [uv](https://docs.astral.sh/uv/) package manager
+{%- if database == 'postgresql' %}
+- PostgreSQL with pgvector extension
+{%- endif %}
+{%- if use_docker %}
+- Docker and Docker Compose (optional)
+{%- endif %}
+
+### Installation
+
+```bash
+# Clone the repository
+cd {{ project_slug }}
+
+# Install dependencies
+make install-dev
+
+# Copy environment file
+cp .env.example .env.development
+# Edit .env.development with your API keys
+```
+
+### Running the Service
+
+{%- if use_docker and database == 'postgresql' %}
+
+#### With Docker (Recommended)
+
+```bash
+make docker-dev
+```
+
+This starts:
+- PostgreSQL with pgvector on port 5432
+- Agent service on port 8000
+{%- if use_prometheus %}
+- Prometheus on port 9090
+- Grafana on port 3000
+{%- endif %}
+
+#### Without Docker
+
+```bash
+# Start PostgreSQL manually, then:
+make dev
+```
+{%- else %}
+
+```bash
+make dev
+```
+{%- endif %}
+
+### API Documentation
+
+Once running, visit:
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+## Usage
+
+### Invoke Agent
+
+```bash
+curl -X POST http://localhost:8000/api/v1/agents/{{ agent_name }}/invoke \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello!"}'
+```
+
+### Stream Response
+
+```bash
+curl -X POST http://localhost:8000/api/v1/agents/{{ agent_name }}/stream \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Tell me a story"}'
+```
+
+### Python Client
+
+```python
+from src.client import AgentClient
+
+async with AgentClient("http://localhost:8000") as client:
+    response = await client.invoke("{{ agent_name }}", "Hello!")
+    print(response["content"])
+
+    # Or stream
+    async for token in client.stream("{{ agent_name }}", "Tell me a story"):
+        print(token, end="", flush=True)
+```
+
+## Project Structure
+
+```
+{{ project_slug }}/
+├── src/
+│   ├── agents/           # Agent implementations
+│   ├── api/              # FastAPI routes
+│   ├── core/             # Configuration, logging, middleware
+│   ├── services/         # LLM, database services
+│   ├── tools/            # LangChain tools
+│   └── main.py           # Application entry point
+├── tests/                # Test suite
+├── infrastructure/       # Docker, Prometheus, Grafana
+└── ...
+```
+
+## Development
+
+### Run Tests
+
+```bash
+make test
+make test-cov  # With coverage
+```
+
+### Linting
+
+```bash
+make lint
+make format
+```
+
+### LangGraph Studio
+
+```bash
+make studio
+```
+
+## Configuration
+
+See `.env.example` for all available configuration options.
+
+Key settings:
+- `DEFAULT_LLM_MODEL`: Model to use (default: {{ default_model }})
+- `DEFAULT_LLM_TEMPERATURE`: Temperature for generation (default: 0.7)
+{%- if database == 'postgresql' %}
+- `POSTGRES_*`: Database connection settings
+{%- endif %}
+{%- if use_auth %}
+- `SECRET_KEY`: JWT signing key (generate with `openssl rand -hex 32`)
+{%- endif %}
+
+## Adding New Tools
+
+Edit `src/tools/tools.py`:
+
+```python
+from langchain_core.tools import tool
+
+@tool
+def my_new_tool(query: str) -> str:
+    """Description of what this tool does."""
+    # Implementation
+    return result
+
+def get_tools() -> list:
+    return [
+        example_search,
+        example_action,
+        my_new_tool,  # Add your tool here
+    ]
+```
+
+## Adding New Agents
+
+1. Create a new file in `src/agents/`
+2. Extend `BaseAgent` class
+3. Register in `src/agents/registry.py`
+
+## License
+
+{{ license }}

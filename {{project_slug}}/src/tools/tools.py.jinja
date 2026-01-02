@@ -1,0 +1,76 @@
+"""
+LangChain tools for {{ project_name }}.
+
+Add your custom tools here. Tools are functions that the agent can call
+to interact with external systems or perform specific operations.
+"""
+
+from langchain_core.tools import tool
+from src.core.logging import get_logger
+
+logger = get_logger("tools")
+
+
+@tool
+def example_search(query: str) -> str:
+    """
+    Search for information based on a query.
+
+    This is an example tool. Replace it with your own tools
+    that integrate with your systems.
+
+    Args:
+        query: The search query
+
+    Returns:
+        Search results as a string
+    """
+    logger.info("example_search_called", query=query)
+
+    # TODO: Implement your actual search logic here
+    # For example:
+    # - Search a database
+    # - Call an external API
+    # - Query a vector store
+
+    return f"Example search results for: {query}"
+
+
+@tool
+def example_action(action: str, data: str) -> str:
+    """
+    Perform an action with the provided data.
+
+    This is an example tool for performing actions.
+    Replace it with your own action tools.
+
+    Args:
+        action: The action to perform
+        data: The data to use for the action
+
+    Returns:
+        Result of the action
+    """
+    logger.info("example_action_called", action=action)
+
+    # TODO: Implement your actual action logic here
+    # For example:
+    # - Create/update records
+    # - Send notifications
+    # - Trigger workflows
+
+    return f"Action '{action}' completed with data: {data}"
+
+
+def get_tools() -> list:
+    """
+    Get all available tools for the agent.
+
+    Add your tools to this list to make them available to agents.
+    """
+    return [
+        example_search,
+        example_action,
+        # Add more tools here:
+        # your_custom_tool,
+    ]

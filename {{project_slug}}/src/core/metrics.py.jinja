@@ -1,0 +1,236 @@
+{%- if use_prometheus %}
+"""
+Prometheus metrics for monitoring agent service.
+"""
+
+from prometheus_client import Counter, Gauge, Histogram, Info
+
+from src.core.config import settings
+
+
+# Application info
+app_info = Info(
+    "{{ _package_name }}_app",
+    "Application information",
+)
+app_info.info({
+    "version": "0.1.0",
+    "environment": settings.app_env,
+})
+
+# Request metrics
+http_requests_total = Counter(
+    "http_requests_total",
+    "Total HTTP requests",
+    ["method", "endpoint", "status"],
+)
+
+http_request_duration_seconds = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request duration in seconds",
+    ["method", "endpoint"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+
+# Agent metrics
+agent_invocations_total = Counter(
+    "agent_invocations_total",
+    "Total agent invocations",
+    ["agent_name", "status"],
+)
+
+agent_invocation_duration_seconds = Histogram(
+    "agent_invocation_duration_seconds",
+    "Agent invocation duration in seconds",
+    ["agent_name"],
+    buckets=[0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0],
+)
+
+agent_tokens_used = Counter(
+    "agent_tokens_used_total",
+    "Total tokens used by agents",
+    ["agent_name", "token_type"],  # token_type: input, output
+)
+
+active_agent_threads = Gauge(
+    "active_agent_threads",
+    "Number of active agent conversation threads",
+    ["agent_name"],
+)
+
+# LLM metrics
+llm_requests_total = Counter(
+    "llm_requests_total",
+    "Total LLM API requests",
+    ["model", "status"],
+)
+
+llm_request_duration_seconds = Histogram(
+    "llm_request_duration_seconds",
+    "LLM API request duration in seconds",
+    ["model"],
+    buckets=[0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0],
+)
+
+llm_retry_count = Counter(
+    "llm_retry_count_total",
+    "Total LLM request retries",
+    ["model", "reason"],
+)
+
+# Memory metrics
+memory_operations_total = Counter(
+    "memory_operations_total",
+    "Total memory operations",
+    ["operation", "status"],  # operation: add, search, update, delete
+)
+
+memory_search_duration_seconds = Histogram(
+    "memory_search_duration_seconds",
+    "Memory search duration in seconds",
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0],
+)
+
+# Tool metrics
+tool_executions_total = Counter(
+    "tool_executions_total",
+    "Total tool executions",
+    ["tool_name", "status"],
+)
+
+tool_execution_duration_seconds = Histogram(
+    "tool_execution_duration_seconds",
+    "Tool execution duration in seconds",
+    ["tool_name"],
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+
+# Rate limiting metrics
+rate_limit_hits_total = Counter(
+    "rate_limit_hits_total",
+    "Total rate limit hits",
+    ["endpoint"],
+)
+
+# Auth metrics
+auth_attempts_total = Counter(
+    "auth_attempts_total",
+    "Total authentication attempts",
+    ["action", "status"],  # action: login, register, refresh
+)
+
+# Database metrics
+db_connections_active = Gauge(
+    "db_connections_active",
+    "Number of active database connections",
+)
+
+db_query_duration_seconds = Histogram(
+    "db_query_duration_seconds",
+    "Database query duration in seconds",
+    ["operation"],
+    buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0],
+)
+
+
+def record_request(method: str, endpoint: str, status: int, duration: float) -> None:
+    """Record HTTP request metrics."""
+    http_requests_total.labels(method=method, endpoint=endpoint, status=status).inc()
+    http_request_duration_seconds.labels(method=method, endpoint=endpoint).observe(duration)
+
+
+def record_agent_invocation(
+    agent_name: str,
+    status: str,
+    duration: float,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> None:
+    """Record agent invocation metrics."""
+    agent_invocations_total.labels(agent_name=agent_name, status=status).inc()
+    agent_invocation_duration_seconds.labels(agent_name=agent_name).observe(duration)
+
+    if input_tokens > 0:
+        agent_tokens_used.labels(agent_name=agent_name, token_type="input").inc(input_tokens)
+    if output_tokens > 0:
+        agent_tokens_used.labels(agent_name=agent_name, token_type="output").inc(output_tokens)
+
+
+def record_llm_request(model: str, status: str, duration: float) -> None:
+    """Record LLM request metrics."""
+    llm_requests_total.labels(model=model, status=status).inc()
+    llm_request_duration_seconds.labels(model=model).observe(duration)
+
+
+def record_tool_execution(tool_name: str, status: str, duration: float) -> None:
+    """Record tool execution metrics."""
+    tool_executions_total.labels(tool_name=tool_name, status=status).inc()
+    tool_execution_duration_seconds.labels(tool_name=tool_name).observe(duration)
+
+
+def record_memory_operation(operation: str, status: str, duration: float | None = None) -> None:
+    """Record memory operation metrics."""
+    memory_operations_total.labels(operation=operation, status=status).inc()
+    if duration is not None and operation == "search":
+        memory_search_duration_seconds.observe(duration)
+{%- else %}
+"""
+Metrics disabled - stub implementations.
+"""
+
+
+def record_request(method: str, endpoint: str, status: int, duration: float) -> None:
+    """No-op when metrics disabled."""
+    pass
+
+
+def record_agent_invocation(
+    agent_name: str,
+    status: str,
+    duration: float,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> None:
+    """No-op when metrics disabled."""
+    pass
+
+
+def record_llm_request(model: str, status: str, duration: float) -> None:
+    """No-op when metrics disabled."""
+    pass
+
+
+def record_tool_execution(tool_name: str, status: str, duration: float) -> None:
+    """No-op when metrics disabled."""
+    pass
+
+
+def record_memory_operation(operation: str, status: str, duration: float | None = None) -> None:
+    """No-op when metrics disabled."""
+    pass
+
+
+# Stub counters for rate limiting
+class StubCounter:
+    def labels(self, **kwargs):
+        return self
+
+    def inc(self):
+        pass
+
+
+rate_limit_hits_total = StubCounter()
+auth_attempts_total = StubCounter()
+llm_retry_count = StubCounter()
+
+# Stub gauge for database
+class StubGauge:
+    def inc(self):
+        pass
+
+    def dec(self):
+        pass
+
+
+db_connections_active = StubGauge()
+{%- endif %}
