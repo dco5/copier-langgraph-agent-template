@@ -13,15 +13,6 @@ dependencies = [
     # LangChain ecosystem
     "langchain>=1.2.0",
     "langchain-core>=1.2.0",
-{%- if llm_provider == 'openai' %}
-    "langchain-openai>=1.1.0",
-{%- elif llm_provider == 'anthropic' %}
-    "langchain-anthropic>=1.3.0",
-{%- elif llm_provider == 'azure' %}
-    "langchain-openai>=1.1.0",
-{%- elif llm_provider == 'ollama' %}
-    "langchain-ollama>=0.3.0",
-{%- endif %}
     "langgraph>=1.0.5",
 {%- if database == 'postgresql' %}
     "langgraph-checkpoint-postgres>=3.0.0",
@@ -89,6 +80,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# LLM Providers - install the ones you need
+openai = [
+    "langchain-openai>=1.1.0",
+]
+anthropic = [
+    "langchain-anthropic>=1.3.0",
+]
+ollama = [
+    "langchain-ollama>=0.3.0",
+]
+# Note: Azure OpenAI uses langchain-openai, so install 'openai' extra
+
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
@@ -119,7 +122,7 @@ streamlit = [
 {%- endif %}
 
 all = [
-    "{{ project_slug }}[dev{% if observability != 'none' %},eval{% endif %}{% if use_streamlit %},streamlit{% endif %}]",
+    "{{ project_slug }}[dev,openai,anthropic,ollama{% if observability != 'none' %},eval{% endif %}{% if use_streamlit %},streamlit{% endif %}]",
 ]
 
 [project.scripts]

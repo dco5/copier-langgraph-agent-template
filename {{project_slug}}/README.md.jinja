@@ -5,7 +5,7 @@
 ## Features
 
 - **LangGraph Agent Framework**: Production-ready agent architecture with state persistence
-- **{{ llm_provider | title }} LLM**: Powered by {{ default_model }}
+- **Multi-Provider LLM Support**: OpenAI, Anthropic, Azure OpenAI, and Ollama (default: {{ default_model }})
 {%- if database == 'postgresql' %}
 - **PostgreSQL Backend**: Durable state checkpointing with pgvector support
 {%- elif database == 'sqlite' %}
@@ -55,8 +55,14 @@
 # Clone the repository
 cd {{ project_slug }}
 
-# Install dependencies
+# Install base dependencies
 make install-dev
+
+# Install LLM provider(s) you need
+pip install '.[openai]'      # For OpenAI/Azure
+pip install '.[anthropic]'   # For Anthropic
+pip install '.[ollama]'      # For Ollama
+pip install '.[all]'         # All providers
 
 # Copy environment file
 cp .env.example .env.development
@@ -174,7 +180,26 @@ make studio
 
 See `.env.example` for all available configuration options.
 
-Key settings:
+### Switching LLM Providers
+
+Change the provider at runtime by setting `LLM_PROVIDER`:
+
+```bash
+# In .env.development
+LLM_PROVIDER=anthropic
+DEFAULT_LLM_MODEL=claude-sonnet-4-20250514
+ANTHROPIC_API_KEY=sk-ant-your-key
+```
+
+Supported providers:
+- `openai` - OpenAI (GPT-4o, GPT-4.1, etc.)
+- `anthropic` - Anthropic (Claude Sonnet 4, Claude Haiku, etc.)
+- `azure` - Azure OpenAI
+- `ollama` - Ollama local models
+
+### Key Settings
+
+- `LLM_PROVIDER`: Active LLM provider (default: {{ llm_provider }})
 - `DEFAULT_LLM_MODEL`: Model to use (default: {{ default_model }})
 - `DEFAULT_LLM_TEMPERATURE`: Temperature for generation (default: 0.7)
 {%- if database == 'postgresql' %}

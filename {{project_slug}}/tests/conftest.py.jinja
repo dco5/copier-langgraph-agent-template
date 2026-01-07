@@ -92,21 +92,15 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
 {%- endif %}
 
 
-{%- if llm_provider == 'openai' %}
-
-
 @pytest.fixture
-def mock_openai_key(monkeypatch):
-    """Mock OpenAI API key for tests."""
+def mock_llm_keys(monkeypatch):
+    """Mock all LLM provider API keys for tests."""
+    monkeypatch.setenv("LLM_PROVIDER", "{{ llm_provider }}")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")
-{%- elif llm_provider == 'anthropic' %}
-
-
-@pytest.fixture
-def mock_anthropic_key(monkeypatch):
-    """Mock Anthropic API key for tests."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
-{%- endif %}
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-azure-key")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://test.openai.azure.com")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 
 @pytest.fixture

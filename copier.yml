@@ -71,17 +71,17 @@ python_version:
 
 llm_provider:
   type: str
-  help: Default LLM provider
+  help: Default LLM provider (can be changed at runtime via LLM_PROVIDER env var)
   default: openai
   choices:
-    OpenAI (GPT-4.1, GPT-4.1-mini): openai
-    Anthropic (Claude Sonnet 4, Claude Haiku 4): anthropic
+    OpenAI (GPT-4o, GPT-4.1, etc.): openai
+    Anthropic (Claude Sonnet 4, Claude Haiku, etc.): anthropic
     Azure OpenAI: azure
-    Ollama (local models): ollama
+    Ollama (local models - llama3.3, etc.): ollama
 
 default_model:
   type: str
-  help: Default model to use
+  help: "Model name (enter any model supported by your provider, e.g., gpt-4o, claude-sonnet-4-20250514, llama3.3)"
   default: "{% if llm_provider == 'openai' %}gpt-4.1{% elif llm_provider == 'anthropic' %}claude-sonnet-4-20250514{% elif llm_provider == 'azure' %}gpt-4.1{% else %}llama3.3{% endif %}"
 
 # =============================================================================

@@ -77,21 +77,22 @@ class Settings(BaseSettings):
     # Note: State is lost on restart
 {%- endif %}
 
-{%- if llm_provider == 'openai' %}
+    # LLM Provider Selection (openai, anthropic, azure, ollama)
+    llm_provider: Literal["openai", "anthropic", "azure", "ollama"] = "{{ llm_provider }}"
+
     # LLM Provider - OpenAI
     openai_api_key: str | None = None
-{%- elif llm_provider == 'anthropic' %}
+
     # LLM Provider - Anthropic
     anthropic_api_key: str | None = None
-{%- elif llm_provider == 'azure' %}
+
     # LLM Provider - Azure OpenAI
     azure_openai_api_key: str | None = None
     azure_openai_endpoint: str | None = None
     azure_openai_api_version: str = "2024-02-01"
-{%- elif llm_provider == 'ollama' %}
+
     # LLM Provider - Ollama (local)
     ollama_base_url: str = "http://localhost:11434"
-{%- endif %}
 
     # LLM Configuration
     default_llm_model: str = "{{ default_model }}"
@@ -104,7 +105,7 @@ class Settings(BaseSettings):
     # Memory Configuration
     long_term_memory_enabled: bool = True
     memory_collection_name: str = "{{ _memory_collection }}"
-    memory_model: str = "{% if llm_provider == 'openai' %}gpt-4.1-mini{% elif llm_provider == 'anthropic' %}claude-haiku-4-5-20251001{% else %}{{ default_model }}{% endif %}"
+    memory_model: str | None = None  # Uses default_llm_model if not set
     memory_embedder_model: str = "text-embedding-3-small"
 {%- endif %}
 
