@@ -34,6 +34,15 @@ uv sync --frozen --all-extras
 uv run pytest tests/ -v
 uv run ruff check src/ tests/
 uv run mypy src/
+
+# Run a single test
+uv run pytest tests/unit/test_config.py::test_settings_load -v
+
+# Lint + test together
+make check
+
+# Run LangGraph Studio for interactive debugging
+make studio
 ```
 
 ## Architecture
@@ -73,7 +82,7 @@ src/
 
 **Agent Implementation**: Agents extend `BaseAgent`, implement `build_graph()` to define the LangGraph StateGraph, and `get_tools()` for available tools. The base class handles checkpointing (PostgreSQL/SQLite/Memory), streaming, and metrics.
 
-**Conditional Code**: Template files use Jinja2 conditionals (`{%- if use_auth %}...{%- endif %}`) to include/exclude features based on template variables. When modifying templates, maintain these conditionals.
+**Conditional Code**: Template files use Jinja2 conditionals (`{%- if use_auth %}...{%- endif %}`) to include/exclude features based on template variables. When modifying templates, maintain these conditionals. Always test template changes with multiple configurations using `./scripts/test-template.sh`.
 
 **Configuration**: Settings are loaded from environment-specific `.env` files (`.env.development`, `.env.production`) via Pydantic Settings.
 
